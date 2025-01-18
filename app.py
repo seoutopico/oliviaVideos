@@ -1,82 +1,106 @@
-# app.py
-from flask import Flask, request, jsonify, send_file
-from moviepy.editor import VideoFileClip, ImageClip, AudioFileClip, CompositeVideoClip
-import requests
-import os
-from io import BytesIO
-from PIL import Image
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import tempfile
+import os
+import requests
+from moviepy.editor import AudioFileClip, ImageClip
+from PIL import Image
+import numpy as np
+import aiofiles
+import uvicorn
 
-app = Flask(__name__)
+app = FastAPI()
 
-def download_file(url):
+class VideoRequest(BaseModel):
+    image_url: str
+    audio_url: str
+
+def download_file(url: str, temp_path: str):
+    """Descarga un archivo desde una URL"""
     response = requests.get(url)
     response.raise_for_status()
-    return BytesIO(response.content)
+    with open(temp_path, 'wb') as f:
+        f.write(response.content)
 
-@app.route('/create-video', methods=['POST'])
-def create_video():
+def process_image(image_path):
+    """Procesa la imagen con Pillow moderno"""
+    with Image.open(image_path) as img:
+        img_resized = img.resize((1080, 1080), Image.Resampling.LANCZOS)
+        return np.array(img_resized)
+
+def create_simple_video(image_path, audio_path):
+    """Crea un video simple: una imagen + audio"""
     try:
-        data = request.json
-        audio_url = data['audio_url']
-        image_url = data['image_url']
-        bg_url = data['bg_url']
-
-        # Create temporary directory for files
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Download and save audio
-            audio_data = download_file(audio_url)
-            audio_path = os.path.join(temp_dir, 'audio.mp3')
-            with open(audio_path, 'wb') as f:
-                f.write(audio_data.getvalue())
-            
-            # Download and process image
-            image_data = download_file(image_url)
-            image = Image.open(image_data)
-            image_path = os.path.join(temp_dir, 'image.png')
-            image.save(image_path)
-            
-            # Download and process background
-            bg_data = download_file(bg_url)
-            bg = Image.open(bg_data)
-            bg_path = os.path.join(temp_dir, 'bg.png')
-            bg.save(bg_path)
-            
-            # Create video
-            audio_clip = AudioFileClip(audio_path)
-            duration = audio_clip.duration
-            
-            # Create background clip
-            bg_clip = ImageClip(bg_path).set_duration(duration).resize((1080, 1080))
-            
-            # Create foreground image clip
-            img_clip = ImageClip(image_path).set_duration(duration)
-            
-            # Resize and center the image if needed (maintaining aspect ratio)
-            # Adjust the width to be 70% of the canvas
-            target_width = int(1080 * 0.7)
-            img_clip = img_clip.resize(width=target_width)
-            img_clip = img_clip.set_position('center')
-            
-            # Combine clips
-            final_clip = CompositeVideoClip([bg_clip, img_clip])
-            final_clip = final_clip.set_audio(audio_clip)
-            
-            # Export video
-            output_path = os.path.join(temp_dir, 'output.mp4')
-            final_clip.write_videofile(output_path, 
-                                     fps=24, 
-                                     codec='libx264', 
-                                     audio_codec='aac')
-            
-            # Return the video file
-            return send_file(output_path, 
-                           mimetype='video/mp4',
-                           as_attachment=True,
-                           download_name='output.mp4')
-
+        # Procesar imagen con Pillow
+        img_array = process_image(image_path)
+        video = ImageClip(img_array)
+        
+        # Agregar audio
+        audio = AudioFileClip(audio_path)
+        final_video = video.set_audio(audio).set_duration(audio.duration)
+        
+        # Guardar video
+        output_path = tempfile.mktemp('.mp4')
+        final_video.write_videofile(
+            output_path,
+            fps=1,
+            codec='libx264',
+            preset='ultrafast',
+            audio_codec='aac',
+            threads=4,
+            logger=None  # Desactivar logs
+        )
+        
+        # Limpiar recursos
+        audio.close()
+        video.close()
+        final_video.close()
+        
+        return output_path
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=f"Error creating video: {str(e)}")
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=os.getenv('PORT', 8080))
+@app.post("/create-video")
+async def create_video(request: VideoRequest):
+    try:
+        # Crear directorio temporal
+        temp_dir = tempfile.mkdtemp()
+        
+        # Rutas temporales para los archivos
+        image_path = os.path.join(temp_dir, "image.jpg")
+        audio_path = os.path.join(temp_dir, "audio.mp3")
+        
+        # Descargar archivos
+        download_file(request.image_url, image_path)
+        download_file(request.audio_url, audio_path)
+        
+        # Crear video
+        output_path = create_simple_video(image_path, audio_path)
+        
+        # Leer el video y devolverlo
+        return FileResponse(
+            output_path,
+            media_type="video/mp4",
+            filename="video.mp4",
+            background=None  # Para permitir que FastAPI maneje el cierre
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    finally:
+        # Limpiar archivos temporales
+        try:
+            if os.path.exists(image_path):
+                os.remove(image_path)
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            if 'output_path' in locals() and os.path.exists(output_path):
+                os.remove(output_path)
+            os.rmdir(temp_dir)
+        except:
+            pass
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8080)
