@@ -26,7 +26,7 @@ def download_file(url: str, temp_path: str):
 def process_image(image_path):
     """Procesa la imagen con Pillow moderno"""
     with Image.open(image_path) as img:
-        img_resized = img.resize((1080, 1080), Image.Resampling.LANCZOS)
+        img_resized = img.resize((1080, 1920), Image.Resampling.LANCZOS)
         return np.array(img_resized)
 
 def create_simple_video(image_path, audio_path):
