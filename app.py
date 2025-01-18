@@ -52,7 +52,10 @@ def create_video():
             # Create foreground image clip
             img_clip = ImageClip(image_path).set_duration(duration)
             
-            # Center the image
+            # Resize and center the image if needed (maintaining aspect ratio)
+            # Adjust the width to be 70% of the canvas
+            target_width = int(1080 * 0.7)
+            img_clip = img_clip.resize(width=target_width)
             img_clip = img_clip.set_position('center')
             
             # Combine clips
