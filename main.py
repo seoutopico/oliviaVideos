@@ -12,6 +12,9 @@ import uvicorn
 
 app = FastAPI()
 
+# Asegurar que el directorio temporal existe
+os.makedirs('/opt/render/project/src/temp', exist_ok=True)
+
 class VideoRequest(BaseModel):
     image_url: str
     audio_url: str
@@ -41,7 +44,7 @@ def create_simple_video(image_path, audio_path):
         final_video = video.set_audio(audio).set_duration(audio.duration)
         
         # Guardar video
-        output_path = tempfile.mktemp('.mp4')
+        output_path = os.path.join('/opt/render/project/src/temp', 'temp_video.mp4')
         final_video.write_videofile(
             output_path,
             fps=1,
@@ -64,8 +67,9 @@ def create_simple_video(image_path, audio_path):
 @app.post("/create-video")
 async def create_video(request: VideoRequest):
     try:
-        # Crear directorio temporal
-        temp_dir = tempfile.mkdtemp()
+        # Usar directorio temporal fijo
+        temp_dir = '/opt/render/project/src/temp'
+        os.makedirs(temp_dir, exist_ok=True)
         
         # Rutas temporales para los archivos
         image_path = os.path.join(temp_dir, "image.jpg")
@@ -96,9 +100,7 @@ async def create_video(request: VideoRequest):
                 os.remove(image_path)
             if os.path.exists(audio_path):
                 os.remove(audio_path)
-            if 'output_path' in locals() and os.path.exists(output_path):
-                os.remove(output_path)
-            os.rmdir(temp_dir)
+            # No eliminamos output_path aquí porque lo necesita FileResponse
         except:
             pass
 
